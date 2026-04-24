@@ -6,6 +6,7 @@ const packsOpened = ge("packs");
 
 let isViewingOtherUser = false;
 let searchUsername = null;
+let currentUserData = null;
 
 if (localStorage.loggedin == "true") {
   sessionStorage = localStorage;
@@ -99,6 +100,10 @@ function fetchCurrentUserData() {
 }
 
 function displayUserProfile(data, isOther) {
+  if (!isOther) {
+    currentUserData = data;
+  }
+  
   const badgesContainer = document.getElementById("badges");
   const badgesContainerParent = document.getElementById("badges-container");
   badgesContainer.innerHTML = ""; 
@@ -156,9 +161,177 @@ function displayUserProfile(data, isOther) {
 
   updateButtonsForViewingMode(isOther, data.username);
   
-  if (!isOther && sessionStorage.loggedin === "true") {
-    updateTokens();
+  if (!isOther) {
+    setupPfpClickListener(data.packs);
+    if (sessionStorage.loggedin === "true") {
+      updateTokens();
+    }
   }
+}
+
+function setupPfpClickListener(packs) {
+  const pfpImg = ge("pfp");
+  if (pfpImg) {
+    pfpImg.onclick = () => openPfpChangeModal(packs);
+  }
+}
+
+function handlePfpClick() {
+  if (currentUserData) {
+    openPfpChangeModal(currentUserData.packs);
+  }
+}
+
+function openPfpChangeModal(packs) {
+  const modal = document.createElement('div');
+  modal.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.7);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 2000;
+  `;
+
+  const modalContent = document.createElement('div');
+  modalContent.style.cssText = `
+    background-color: #6f057a;
+    box-shadow: inset 0 -0.365vw #61056b, 3px 3px 15px rgba(0, 0, 0, 0.6);
+    padding: 20px;
+    border-radius: 8px;
+    width: 90%;
+    max-width: 600px;
+    max-height: 70vh;
+    overflow-y: auto;
+    font-family: 'pixelify sans';
+  `;
+
+  const title = document.createElement('h2');
+  title.textContent = 'Select a Pixel for Profile Picture';
+  title.style.cssText = `
+    color: white;
+    text-align: center;
+    margin-bottom: 20px;
+  `;
+  modalContent.appendChild(title);
+
+  const pixelGrid = document.createElement('div');
+  pixelGrid.style.cssText = `
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+    gap: 10px;
+    margin-bottom: 20px;
+  `;
+
+  packs.forEach(pack => {
+    if (pack.blooks && pack.blooks.length > 0) {
+      pack.blooks.forEach(blook => {
+        if (blook.owned && blook.owned > 0) {
+          const pixelItem = document.createElement('div');
+          pixelItem.style.cssText = `
+            text-align: center;
+            cursor: pointer;
+            border-radius: 5px;
+            padding: 8px;
+            background-color: rgba(0, 0, 0, 0.3);
+            transition: all 0.2s ease;
+          `;
+          pixelItem.onmouseover = () => {
+            pixelItem.style.transform = 'scale(1.1)';
+            pixelItem.style.backgroundColor = 'rgba(0, 255, 0, 0.2)';
+          };
+          pixelItem.onmouseout = () => {
+            pixelItem.style.transform = 'scale(1)';
+            pixelItem.style.backgroundColor = 'rgba(0, 0, 0, 0.3)';
+          };
+
+          const img = document.createElement('img');
+          img.src = blook.imageUrl;
+          img.style.cssText = `
+            width: 70px;
+            height: 70px;
+            object-fit: contain;
+            margin-bottom: 5px;
+          `;
+
+          const label = document.createElement('div');
+          label.textContent = blook.name;
+          label.style.cssText = `
+            color: white;
+            font-size: 12px;
+            word-wrap: break-word;
+          `;
+
+          pixelItem.appendChild(img);
+          pixelItem.appendChild(label);
+
+          pixelItem.onclick = async () => {
+            try {
+              const response = await fetch('/changePfp', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ name: blook.name, parent: pack.name })
+              });
+
+              if (response.ok) {
+                const pfpImg = ge('pfp');
+                pfpImg.src = blook.imageUrl;
+                document.body.removeChild(modal);
+              } else {
+                alert('Error changing profile picture');
+              }
+            } catch (error) {
+              console.error('Error:', error);
+              alert('Error changing profile picture');
+            }
+          };
+
+          pixelGrid.appendChild(pixelItem);
+        }
+      });
+    }
+  });
+
+  modalContent.appendChild(pixelGrid);
+
+  const closeButton = document.createElement('button');
+  closeButton.textContent = 'Close';
+  closeButton.style.cssText = `
+    background-color: #b30000;
+    box-shadow: inset 0 -0.365vw #800000, 3px 3px 15px rgba(0, 0, 0, 0.6);
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-family: 'pixelify sans';
+    font-size: 14px;
+    width: 100%;
+    margin-top: 10px;
+  `;
+  closeButton.onmouseover = () => {
+    closeButton.style.boxShadow = 'inset 0 -0.5vw #800000, 3px 3px 15px rgba(0, 0, 0, 0.6)';
+  };
+  closeButton.onmouseout = () => {
+    closeButton.style.boxShadow = 'inset 0 -0.365vw #800000, 3px 3px 15px rgba(0, 0, 0, 0.6)';
+  };
+  closeButton.onclick = () => document.body.removeChild(modal);
+  modalContent.appendChild(closeButton);
+
+  modal.appendChild(modalContent);
+  modal.onclick = (e) => {
+    if (e.target === modal) {
+      document.body.removeChild(modal);
+    }
+  };
+
+  document.body.appendChild(modal);
 }
 
 function updateButtonsForViewingMode(isOther, username) {
