@@ -192,22 +192,143 @@ document.addEventListener("paste", (event) => {
     for (const item of items) {
         if (item.type.startsWith("image/")) {
             const file = item.getAsFile();
-            const reader = new FileReader();
-            reader.onload = function (event) {
-                const imageUrl = event.target.result; 
-                const timestamp = Date.now(); 
-                const chatMessage = { sender: username, msg: imageUrl, badges, pfp, timestamp }; 
-                const messageHTML = createMessageHTML(chatMessage);
-                const messagesContainer = ge("chatContainer");
-                messagesContainer.innerHTML += messageHTML;
-                messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                socket.emit("message", chatMessage); 
-            };
-            reader.readAsDataURL(file); 
-            break; 
+            showImageUploadConfirmation(file);
+            break;
         }
     }
 });
+
+function showImageUploadConfirmation(file) {
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.7);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 10000;
+    `;
+
+    const modalContent = document.createElement('div');
+    modalContent.style.cssText = `
+        background-color: #6f057a;
+        box-shadow: inset 0 -0.365vw #61056b, 3px 3px 15px rgba(0, 0, 0, 0.6);
+        padding: 20px;
+        border-radius: 8px;
+        text-align: center;
+        font-family: 'pixelify sans';
+        max-width: 400px;
+        width: 90%;
+    `;
+
+    const title = document.createElement('h2');
+    title.textContent = 'Upload Image?';
+    title.style.cssText = 'color: white; margin-bottom: 15px;';
+    modalContent.appendChild(title);
+
+    const preview = document.createElement('img');
+    preview.style.cssText = `
+        max-width: 200px;
+        max-height: 200px;
+        border-radius: 5px;
+        margin-bottom: 15px;
+        border: 2px solid #61056b;
+    `;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        preview.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+    modalContent.appendChild(preview);
+
+    const fileInfo = document.createElement('p');
+    fileInfo.textContent = `File: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+    fileInfo.style.cssText = 'color: white; margin-bottom: 20px; font-size: 14px;';
+    modalContent.appendChild(fileInfo);
+
+    const buttonContainer = document.createElement('div');
+    buttonContainer.style.cssText = 'display: flex; gap: 10px; justify-content: center;';
+
+    const cancelButton = document.createElement('button');
+    cancelButton.textContent = 'Cancel';
+    cancelButton.style.cssText = `
+        background-color: #b30000;
+        box-shadow: inset 0 -0.365vw #800000, 3px 3px 15px rgba(0, 0, 0, 0.6);
+        color: white;
+        padding: 10px 20px;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        font-family: 'pixelify sans';
+        font-size: 14px;
+        flex: 1;
+    `;
+    cancelButton.onmouseover = () => {
+        cancelButton.style.boxShadow = 'inset 0 -0.5vw #800000, 3px 3px 15px rgba(0, 0, 0, 0.6)';
+    };
+    cancelButton.onmouseout = () => {
+        cancelButton.style.boxShadow = 'inset 0 -0.365vw #800000, 3px 3px 15px rgba(0, 0, 0, 0.6)';
+    };
+    cancelButton.onclick = () => document.body.removeChild(modal);
+
+    const uploadButton = document.createElement('button');
+    uploadButton.textContent = 'Upload';
+    uploadButton.style.cssText = `
+        background-color: #00aa00;
+        box-shadow: inset 0 -0.365vw #008000, 3px 3px 15px rgba(0, 0, 0, 0.6);
+        color: white;
+        padding: 10px 20px;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        font-family: 'pixelify sans';
+        font-size: 14px;
+        flex: 1;
+    `;
+    uploadButton.onmouseover = () => {
+        uploadButton.style.boxShadow = 'inset 0 -0.5vw #008000, 3px 3px 15px rgba(0, 0, 0, 0.6)';
+    };
+    uploadButton.onmouseout = () => {
+        uploadButton.style.boxShadow = 'inset 0 -0.365vw #008000, 3px 3px 15px rgba(0, 0, 0, 0.6)';
+    };
+    uploadButton.onclick = () => {
+        document.body.removeChild(modal);
+        uploadImage(file);
+    };
+
+    buttonContainer.appendChild(cancelButton);
+    buttonContainer.appendChild(uploadButton);
+    modalContent.appendChild(buttonContainer);
+
+    modal.appendChild(modalContent);
+    modal.onclick = (e) => {
+        if (e.target === modal) {
+            document.body.removeChild(modal);
+        }
+    };
+
+    document.body.appendChild(modal);
+}
+
+function uploadImage(file) {
+    const reader = new FileReader();
+    reader.onload = function (event) {
+        const imageUrl = event.target.result;
+        const timestamp = Date.now();
+        const chatMessage = { sender: username, msg: imageUrl, badges, pfp, timestamp };
+        const messageHTML = createMessageHTML(chatMessage);
+        const messagesContainer = ge("chatContainer");
+        messagesContainer.innerHTML += messageHTML;
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        socket.emit("message", chatMessage);
+    };
+    reader.readAsDataURL(file);
+}
 
 
 function updateMessages(newMessages) {
