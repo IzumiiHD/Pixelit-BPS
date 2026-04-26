@@ -620,52 +620,44 @@ router.get("/getAccounts", async (req, res) => {
 });
 
 router.post("/spin", async (req, res) => {
-    const session = req.session;
+  if (!req.session?.loggedIn) {
+    return res.status(401).json({ message: "You must be logged in to spin." });
+  }
 
-    if (!session.loggedIn) {
-        return res.status(401).json({ message: "You must be logged in to spin." });
+  try {
+    const now = Date.now();
+    const cooldownMs = 8 * 60 * 60 * 1000;
+    const reward = [500, 600, 700, 800, 900, 1000][Math.floor(Math.random() * 6)];
+
+    const result = await users.findOneAndUpdate(
+      {
+        username: req.session.username,
+        $or: [
+          { lastSpin: { $exists: false } },
+          { lastSpin: { $lte: now - cooldownMs } }
+        ]
+      },
+      {
+        $inc: { tokens: reward },
+        $set: { lastSpin: now }
+      },
+      { returnDocument: "after" }
+    );
+
+    if (!result.value) {
+      return res.status(429).json({
+        message: "Tokens have already been claimed. Please wait for the next 8 hours."
+      });
     }
 
-    try {
-        const usersCollection = db.collection("users");
-        const user = await usersCollection.findOne({ username: session.username });
-
-        if (!user) {
-            return res.status(404).json({ message: "User not found." });
-        }
-
-        const now = Date.now();
-
-        if (user.claimed && now - user.lastSpin < 8 * 3600000) { 
-            return res.status(429).json({ message: "Tokens have already been claimed. Please wait for the next 8 hours to be able to claim your tokens again!" });
-        }
-
-        const tokensWonRandom = [500, 600, 700, 800, 900, 1000][Math.floor(Math.random() * 6)];
-
-        await usersCollection.updateOne(
-            { username: session.username },
-            {
-                $inc: { tokens: tokensWonRandom },
-                $set: { claimed: true, lastSpin: now } 
-            }
-        );
-
-        res.status(200).json({
-            message: "Spin successful",
-            tokensWon: tokensWonRandom,
-        });
-
-        setTimeout(async () => {
-            await usersCollection.updateOne(
-                { username: session.username },
-                { $set: { claimed: false } } 
-            );
-        }, 8 * 3600000);
-
-    } catch (error) {
-        console.error("Error managing spins:", error);
-        res.status(500).json({ message: "Internal server error" });
-    }
+    return res.status(200).json({
+      message: "Spin successful",
+      tokensWon: reward
+    });
+  } catch (error) {
+    console.error("Error managing spins:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
 });
 
 const app = express();
@@ -680,48 +672,61 @@ app.get('/users', async (req, res) => {
 });
 
 router.post("/sellBlook", async (req, res) => {
-  const { name, rarity, tokensToAdd, quantity } = req.body;
-  const validTokensToAdd = (RARITY_VALUES[rarity] || 0) * quantity; 
+  const { name, quantity } = req.body;
 
-  if (!req.session || !req.session.loggedIn) {
-    return res.status(401).json({ success: false, message: "You must be logged in to sell a blook." });
+  if (!req.session?.loggedIn) {
+    return res.status(401).json({ success: false, message: "You must be logged in." });
   }
 
-  if (typeof quantity !== 'number' || isNaN(quantity) || quantity <= 0) {
-    return res.status(400).json({ success: false, message: "Invalid quantity specified." });
-  }
-
-  if (tokensToAdd !== validTokensToAdd) {
-    return res.status(400).json({ success: false, message: "Invalid tokens to add specified." });
+  if (!Number.isInteger(quantity) || quantity < 1) {
+    return res.status(400).json({ success: false, message: "Quantity must be a positive integer." });
   }
 
   try {
-    const user = await users.findOne({ username: req.session.username });
-    const pack = user.packs.find(p => p.blooks.some(b => b.name === name));
+    const user = await users.findOne(
+      { username: req.session.username },
+      { projection: { packs: 1, tokens: 1 } }
+    );
 
-    if (!pack) {
-      return res.status(404).json({ success: false, message: "Blook not found in your packs." });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    const blook = pack.blooks.find(b => b.name === name);
-
-    if (!blook) {
+    const pack = user.packs.find(p => p.blooks?.some(b => b.name === name));
+    if (!pack) {
       return res.status(404).json({ success: false, message: "Blook not found." });
     }
 
-    if (blook.owned < quantity) {
-      return res.status(400).json({ success: false, message: "You don't have enough of this blook to sell.", actualOwned: blook.owned });
+    const blook = pack.blooks.find(b => b.name === name);
+    if (!blook || !Number.isInteger(blook.owned) || blook.owned < quantity) {
+      return res.status(400).json({ success: false, message: "You don't own enough of this blook." });
     }
 
+    const payoutPer = RARITY_VALUES[blook.rarity];
+    if (!payoutPer) {
+      return res.status(400).json({ success: false, message: "Unknown blook rarity." });
+    }
+
+    const tokensToAdd = payoutPer * quantity;
+
     blook.owned -= quantity;
-    user.tokens += tokensToAdd;
 
-    await users.updateOne({ username: req.session.username }, { $set: { packs: user.packs, tokens: user.tokens } });
+    await users.updateOne(
+      { username: req.session.username },
+      {
+        $set: { packs: user.packs },
+        $inc: { tokens: tokensToAdd }
+      }
+    );
 
-    res.json({ success: true, message: `Successfully sold ${quantity} ${name}(s).`, newBalance: user.tokens });
+    return res.json({
+      success: true,
+      message: `Sold ${quantity} ${name}(s).`,
+      tokensGained: tokensToAdd
+    });
   } catch (error) {
     console.error("Error selling blook:", error);
-    res.status(500).json({ success: false, message: "An error occurred while selling the blook." });
+    res.status(500).json({ success: false, message: "Server error." });
   }
 });
 
@@ -767,71 +772,91 @@ router.get("/packs", async (req, res) => {
 });
 
 
-router.get("/openPack", packOpenLimiter, async (req, res) => {
-    const session = req.session;
-    if (session && session.loggedIn) {
-        const user = { name: session.username };
-        const packName = req.query.pack;
+router.post("/openPack", packOpenLimiter, async (req, res) => {
+  if (!req.session?.loggedIn) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
 
-        try {
-            const person = await users.findOne({ username: user.name });
-            const pack = await packs.findOne({ name: packName });
+  const packName = req.body.pack;
+  const mongoSession = client.startSession();
 
-            if (!person || !pack) {
-                return res.status(404).json({ error: "User or pack not found" });
-            }
-            if (person.tokens < pack.cost) {
-                return res.status(400).json({ error: "Not enough tokens" });
-            }
+  try {
+    let openedResult;
 
-            const blooks = pack.blooks.filter(blook => blook.visible === true); 
+    await mongoSession.withTransaction(async () => {
+      const person = await users.findOne(
+        { username: req.session.username },
+        { session: mongoSession }
+      );
+      const pack = await packs.findOne(
+        { name: packName },
+        { session: mongoSession }
+      );
 
-            let totalChance = blooks.reduce((sum, blook) => sum + Number(blook.chance), 0);
-            if (totalChance === 0) {
-                return res.status(500).json({ error: "No blooks available to select from" });
-            }
+      if (!person || !pack) {
+        throw new Error("NOT_FOUND");
+      }
 
-            const randNum = rand(0, totalChance);
-            let currentChance = 0;
-            let selectedBlook;
+      if (person.tokens < pack.cost) {
+        throw new Error("INSUFFICIENT_TOKENS");
+      }
 
-            for (const blook of blooks) {
-                if (randNum >= currentChance && randNum < currentChance + Number(blook.chance)) {
-                    selectedBlook = blook;
-                    break;
-                }
-                currentChance += Number(blook.chance);
-            }
+      const visibleBlooks = pack.blooks.filter(b => b.visible === true);
+      const totalChance = visibleBlooks.reduce((sum, b) => sum + Number(b.chance || 0), 0);
+      if (totalChance <= 0) {
+        throw new Error("NO_BLOOKS");
+      }
 
-            if (!selectedBlook) {
-                return res.status(500).json({ error: "Failed to select a blook" });
-            }
+      const roll = Math.random() * totalChance;
+      let acc = 0;
+      let selectedBlook = null;
 
-            await users.updateOne(
-                { username: user.name },
-                {
-                    $inc: { 
-                        tokens: -pack.cost,
-                        [`packs.$[pack].blooks.$[blook].owned`]: 1,
-                        packsOpened: 1
-                    }
-                },
-                {
-                    arrayFilters: [
-                        { "pack.name": pack.name },
-                        { "blook.name": selectedBlook.name }
-                    ]
-                }
-            );
-            res.status(200).json({ pack: pack.name, blook: selectedBlook });
-            console.log(`${user.name} opened ${pack.name} and got ${selectedBlook.name}`);
-        } catch (error) {
-            console.error("Error opening pack:", error);
-            res.status(500).json({ error: "Internal server error" });
+      for (const blook of visibleBlooks) {
+        acc += Number(blook.chance || 0);
+        if (roll < acc) {
+          selectedBlook = blook;
+          break;
         }
-    } else {
-        res.status(401).json({ error: "Unauthorized" });
+      }
+
+      if (!selectedBlook) {
+        throw new Error("SELECTION_FAILED");
+      }
+
+      await users.updateOne(
+        { username: req.session.username },
+        {
+          $inc: {
+            tokens: -pack.cost,
+            packsOpened: 1,
+            [`packs.$[pack].blooks.$[blook].owned`]: 1
+          }
+        },
+        {
+          session: mongoSession,
+          arrayFilters: [
+            { "pack.name": pack.name },
+            { "blook.name": selectedBlook.name }
+          ]
+        }
+      );
+
+      openedResult = { pack: pack.name, blook: selectedBlook };
+    });
+
+    return res.status(200).json(openedResult);
+  } catch (error) {
+    if (error.message === "INSUFFICIENT_TOKENS") {
+      return res.status(400).json({ error: "Not enough tokens" });
     }
+    if (error.message === "NOT_FOUND") {
+      return res.status(404).json({ error: "User or pack not found" });
+    }
+    console.error("Error opening pack:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  } finally {
+    await mongoSession.endSession();
+  }
 });
 
 router.post("/muteBanUser", async (req, res) => {
@@ -1135,30 +1160,31 @@ router.get("/badges", async (req, res) => {
 });
 
 router.post("/add-badge", async (req, res) => {
-    console.log("Request body:", req.body);
-    const { username, badge } = req.body;
+  if (!req.session?.loggedIn) {
+    return res.status(401).json({ message: "Login required." });
+  }
 
-    try {
-        if (!username || !badge) {
-            return res.status(400).json({ message: "Username and badge data are required" }); 
-        }
+  const actor = await users.findOne({ username: req.session.username });
+  if (!actor || !["Owner", "Admin", "Developer"].includes(actor.role)) {
+    return res.status(403).json({ message: "Forbidden." });
+  }
 
-        const user = await users.findOne({ username: username });
-        if (!user) {
-            return res.status(404).json({ message: "User not found" });
-        }
+  const { username, badgeName } = req.body;
+  if (!username || !badgeName) {
+    return res.status(400).json({ message: "Username and badge name are required." });
+  }
 
-        const updatedBadges = [...(user.badges || []), {
-            name: badge.name,
-            image: badge.image
-        }];
+  const badgeDoc = await badges.findOne({ name: badgeName });
+  if (!badgeDoc) {
+    return res.status(404).json({ message: "Badge not found." });
+  }
 
-        await users.updateOne({ username: username }, { $set: { badges: updatedBadges } });
-        res.status(200).json({ message: "Badge added successfully!" }); 
-    } catch (error) {
-        console.error("Error adding badge:", error);
-        res.status(500).json({ message: "Error adding badge: " + error.message }); 
-    }
+  await users.updateOne(
+    { username },
+    { $addToSet: { badges: { name: badgeDoc.name, image: badgeDoc.image } } }
+  );
+
+  return res.json({ message: "Badge added." });
 });
 
 router.post('/checkUser', async (req, res) => {

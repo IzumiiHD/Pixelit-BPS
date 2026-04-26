@@ -164,11 +164,14 @@ async function openPack(packName, packCost) {
   const packElement = document.querySelector(`[data-pack-name="${packName}"]`);
   packElement.classList.add('opening');
   try {
-    const response = await fetch(`/openPack?pack=${encodeURIComponent(packName)}`, {
-      method: 'GET',
+    const response = await fetch(`/openPack`, {
+      method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
+      body: JSON.stringify({
+        pack: packName
+      })
     });
     if (!response.ok) {
       throw new Error('Failed to open pack');
